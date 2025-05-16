@@ -1,9 +1,11 @@
 import streamlit as st
 import secrets
-import multiprocessing as mp
+import io
+import hashlib
 
 from src.miller_rabin import miller_rabin_generator_wrapper
-from src.ecc import double_and_add
+from src.ecc import double_and_add, ecc_add
+from PIL import Image
 
 ECC_STANDARDS = {
     "secp256k1": {
@@ -51,6 +53,10 @@ for key in ECC_STANDARDS.keys():
     ECC_STANDARDS[key]["order_G_string"] = order_G_string
     ECC_STANDARDS[key]["p_bits"] = str(prime_bits)
     ECC_STANDARDS[key]["order_G_bits"] = str(order_G_bits)
+
+def d2hex(x):
+    h = hex(x)
+    return ":".join([h[i : i + 2] for i in range(2, len(h), 2)])
 
 def main():
     def miller_rabin_generator(container):    
@@ -264,7 +270,7 @@ def main():
                 alice_ephermal_t = int(st.session_state["alice_ephermal"])
                 bob_ephermal_t = int(st.session_state["bob_ephermal"])
             except ValueError:
-                result_container.write("Error during parsing of ephermal keys, ensure that passed keys are integers!")
+                result_container.error("Error during parsing of ephermal keys, ensure that passed keys are integers!")
                 return
             
             prime = ECC_STANDARDS[standard]["p"]
@@ -301,6 +307,12 @@ def main():
                                     **Bob computes shared secret**: {ss_x_bob}\n
                                    """)
             
+            if ss_x_alice == ss_x_bob:
+                result_container.success("Alice and Bob agreed on same shared secret, protocol successful.")
+            
+            else:
+                result_container.error("Shared secret not the same on both sides, implementation error.")
+            
         with col1:
             alice_ephermal = st.text_input("Alice ephermal key", help = "Has to be a number between 1 and the order of generator point exclusively", key = "alice_ephermal")
         
@@ -320,10 +332,159 @@ def main():
     st.markdown(r"""
                 ## ECDSA - Elliptic Curve Digital Signature Algorithm
                 """)
-
+    
     _, image, __ = st.columns(3)
     image.image("./figs/ecdsa.png", caption = "Elliptic curve digital signature algorithm pseudocode. Source: [1]")
 
+    st.markdown(r"""
+                In previous pseudocode, $x(P)$ stands for the x-coordinate of a point $P \in E(\mathbb{F_p})$, the notation we used for ECDH was $P.x$. Now, let us prove
+                that the previous signature generation algorithm is correct, that is if $(s1, s2)$ is a valid signature for document $d$, then we will obtain
+                $(v_1G + v_2V).x \equiv s_1 (mod \text{ } q)$:
+
+                $$
+                \begin{align*}
+                    v_1G + v_2V &= de (d + ss_1)^{-1} (mod \text{ } q) G + s_1e(d + ss_{1})^{-1} (mod \text{ } q) sG \\
+                    & = (de(d + ss_1)^{-1}(mod \text{ } q) + ss_1e(d + ss_1)^{-1}(mod \text{ } q))G \\
+                    &= (e \underbrace{(d + ss_1)^{-1}(mod \text{ } q)(d + ss_1)}_{1, G \text{ is of order q}})G = eG \\
+                    & \text{ Therefore, the signature } (s1, s2) \text{ for document } d \text{ is valid if and only if } (v_1G + v_2V).x \equiv s_1 (mod \text{ } q)
+                \end{align*}
+                $$
+
+                Unlike ECDH, we cannot avoid redundancy here, for each document we have to keep two numbers $(s1, s2)$ of the same bit length. When it comes
+                to compressing documents to $mod \text{ } q$ space, generally a hash function is used. Since all of our ECC standards use generator points of 
+                256-bit prime order, we will use **SHA-256** hash function.  
+                """)
+
+    with st.container(border = True):
+        def create_ecdsa_verification_key():
+            st.session_state["create_ecdsa_verification_key_clicked"] = True
+
+            if "s1" in st.session_state: 
+                del st.session_state["s1"]
+
+            if "s2" in st.session_state: 
+                del st.session_state["s2"]
+
+            if "ecdsa_signature_hex" in st.session_state:
+                del st.session_state["ecdsa_signature_hex"]
+
+            standard = ECC_STANDARDS[st.session_state['ecc_standard_options']]
+            prime = standard["p"]
+            G = standard["G"]
+            a = standard["a"]
+            order_G = standard["order_G"]
+
+            s = 2 + secrets.randbelow(order_G - 3)
+            V = double_and_add(prime, a, s, G)
+
+            st.session_state["s"] = s
+            st.session_state["V"] = V
+
+        def ecdsa_verify(container):
+            image = st.session_state["uploaded_image"].getvalue()
+            d = int(hashlib.sha256(image).hexdigest(), 16)
+            
+            standard = ECC_STANDARDS[st.session_state['ecc_standard_options']]
+            prime = standard["p"]
+            G = standard["G"]
+            a = standard["a"]
+            order_G = standard["order_G"]
+            d %= order_G
+
+            V = st.session_state["V"]
+            s1 = st.session_state["s1"]
+            s2 = st.session_state["s2"]
+            s2_inv = pow(s2, -1, order_G)
+            v1 = (d * s2_inv) % order_G
+            v2 = (s1 * s2_inv) % order_G
+
+            v1_G = double_and_add(prime, a, v1, G)
+            v2_V = double_and_add(prime, a, v2, V)
+            final_point = ecc_add(prime, a, v1_G, v2_V)
+            final_x = final_point[0] % order_G
+
+            container.markdown(f"**Verification code**: {d2hex(final_x)}  \n**Target code**: {d2hex(s1)}")
+            if final_x != s1:
+                container.error("Signature failed, implementation wrong.")
+
+            else:
+                container.success("Verification successful!")
+
+        def ecdsa_sign(container):
+            if "s" not in st.session_state:
+                container.error("You have to generate verification key before creating a signature!")
+                return
+            
+            image = st.session_state["uploaded_image"].getvalue()
+            d = int(hashlib.sha256(image).hexdigest(), 16)
+            
+            standard = ECC_STANDARDS[st.session_state['ecc_standard_options']]
+            prime = standard["p"]
+            G = standard["G"]
+            a = standard["a"]
+            order_G = standard["order_G"]
+
+            d %= order_G
+            ephermal_key = 2 + secrets.randbelow(order_G - 2)
+            eG = double_and_add(prime, a, ephermal_key, G)
+            s1 = eG[0] % order_G
+            s2 = ((d + st.session_state["s"] * s1) * pow(ephermal_key, -1, order_G)) % order_G
+
+            st.session_state["s1"] = s1
+            st.session_state["s2"] = s2
+
+        def image_on_change():
+            if "s1" in st.session_state: 
+                del st.session_state["s1"]
+
+            if "s2" in st.session_state: 
+                del st.session_state["s2"]
+
+            if "ecdsa_signature_hex" in st.session_state:
+                del st.session_state["ecdsa_signature_hex"]
+
+        st.header("ECDSA Simulation")
+        st.text(f"Chosen ECC standard: {st.session_state['ecc_standard_options']}")
+        st.button(f"Create ECDSA verification key", on_click = create_ecdsa_verification_key)
+        if "create_ecdsa_verification_key_clicked" in st.session_state:
+            verification_key_container = st.container()
+            verification_key_container.text(f"Secret signing key: {st.session_state['s']}\nPublic veirifcation key: {str(st.session_state['V'])}")
+
+        st.file_uploader("Upload an image", type = ["jpg", "jpeg", "png"], key = "uploaded_image", on_change = image_on_change)
+        sign_container = st.container()
+
+        if st.session_state["uploaded_image"]:
+            image = st.session_state["uploaded_image"].getvalue()
+            image = Image.open(io.BytesIO(image))
+            image_container, ecdsa_container = sign_container.columns(2, vertical_alignment = "top")
+            image_container.image(image, use_container_width = True, caption = "Image preview")
+            ecdsa_container.button("Generate ECDSA signature", on_click = ecdsa_sign, args = (ecdsa_container,))
+
+            if "s1" in st.session_state:
+                signature_upper = d2hex(st.session_state["s1"])
+                signature_lower = d2hex(st.session_state["s2"])        
+                target = f"{signature_upper}:{signature_lower}"
+                st.session_state["ecdsa_signature_hex"] = target
+                ecdsa_container.write(f"**ECDSA Signature**: {st.session_state['ecdsa_signature_hex']}")
+                ecdsa_container.button("Verify Signature", on_click = ecdsa_verify, args = (ecdsa_container,))
+
+    st.markdown(r"""
+                ### ECC ElGamal
+                It's very similar to ElGamal in $\mathbb{F_p}$, we give the pseudocode on the figure below.
+                """)
+    _, image, __ = st.columns(3)
+    image.image("./figs/ecc_elgamal.png", caption = "ECC ElGamal pseudocode. Source: [1]")
+
+    st.markdown(r"""
+                However, public key protocols are rarely used for bulk message encryption, and this holds especially for ECC ElGama for the following reasons:
+
+                * Notice that with the previous algorithm we are essentially encrypting points on $E(\mathbb{F_p})$, and there is no obvious way of mapping from 
+                text messages to $E(\mathbb{F_p})$ (potential method is discussed in [1]).
+
+                * Both classical ElGamal and ECC ElGamal are significantly slower than symmetric encryption algorithms like AES.
+
+                Therefore for completeness, we only include the pseudocode for ECC ElGamal.
+                """)
     st.markdown(r"""
     ## Large prime generation
     When a research institution wants to create a new ECC standard, one of the first steps is to generate a large prime number. For illustrative purposes, 
