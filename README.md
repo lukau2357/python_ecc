@@ -6,6 +6,7 @@ To run locally, just install dependencies from **requirements.txt**, and run:
 streamlit run main.py
 ```
 
-<video width="320" height="240" controls>
-  <source src="./figs/demo.mp4" type="video/mp4">
+
+<video controls>
+  <source src="https://github.com/lukau2357/python_ecc/raw/refs/heads/main/figs/demo.mp4" type="video/mp4">
 </video>
