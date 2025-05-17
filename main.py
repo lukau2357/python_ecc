@@ -225,8 +225,25 @@ def main():
 
         container.table(new_options)
 
+    def new_standard():
+        if "create_ecdsa_verification_key_clicked" in st.session_state:
+            del st.session_state["create_ecdsa_verification_key_clicked"]
+        
+        if "s" in st.session_state:
+            del st.session_state["s"]
+
+        if "V" in st.session_state:
+            del st.session_state["V"]
+        
+        if "s1" in st.session_state:
+            del st.session_state["s1"]
+
+        if "s2" in st.session_state:
+            del st.session_state["s2"]
+
     ecc_standard_options = st.selectbox(
-        "ECC standard, will be used for algorithms implemented below", tuple(ECC_STANDARDS.keys()), index = 0, key = "ecc_standard_options", accept_new_options = False
+        "ECC standard, will be used for algorithms implemented below", tuple(ECC_STANDARDS.keys()), index = 0, key = "ecc_standard_options", accept_new_options = False,
+        on_change = new_standard
     )
     ecc_standard_options_container = st.empty()
 
@@ -314,14 +331,14 @@ def main():
                 result_container.error("Shared secret not the same on both sides, implementation error.")
             
         with col1:
-            alice_ephermal = st.text_input("Alice ephermal key", help = "Has to be a number between 1 and the order of generator point exclusively", key = "alice_ephermal")
+            alice_ephermal = st.text_input("Alice ephermal key", key = "alice_ephermal")
         
         with col2:
             alice_generate_btn = st.button("Generate random ephermal key for Alice", on_click = generate_ecdh_ephermal_key, args = ("alice_ephermal", st.session_state["ecc_standard_options"]))
 
         col1, col2, _ = st.columns(3, vertical_alignment = "bottom")
         with col1:
-            bob_ephermal = st.text_input("Bob ephermal key", help = "Has to be a number between 1 and the order of generator point exclusively", key = "bob_ephermal")
+            bob_ephermal = st.text_input("Bob ephermal key", key = "bob_ephermal")
         
         with col2:
             bob_generate_btn = st.button("Generate random ephermal key for Bob", on_click = generate_ecdh_ephermal_key, args = ("bob_ephermal", st.session_state["ecc_standard_options"]))
@@ -403,9 +420,9 @@ def main():
             final_point = ecc_add(prime, a, v1_G, v2_V)
             final_x = final_point[0] % order_G
 
-            container.markdown(f"**Verification code**: {d2hex(final_x)}  \n**Target code**: {d2hex(s1)}")
+            container.text(f"Verification code: {d2hex(final_x)}  \nTarget code: {d2hex(s1)}")
             if final_x != s1:
-                container.error("Signature failed, implementation wrong.")
+                container.error("Signature failed, implementation error.")
 
             else:
                 container.success("Verification successful!")
@@ -465,7 +482,7 @@ def main():
                 signature_lower = d2hex(st.session_state["s2"])        
                 target = f"{signature_upper}:{signature_lower}"
                 st.session_state["ecdsa_signature_hex"] = target
-                ecdsa_container.write(f"**ECDSA Signature**: {st.session_state['ecdsa_signature_hex']}")
+                ecdsa_container.text(f"ECDSA Signature: {st.session_state['ecdsa_signature_hex']}")
                 ecdsa_container.button("Verify Signature", on_click = ecdsa_verify, args = (ecdsa_container,))
 
     st.markdown(r"""
@@ -504,15 +521,59 @@ def main():
     st.markdown("If you want further reassurance that the found number is actually prime, you can use the following service: https://bigprimes.org/primality-test")
 
     st.markdown(r"""
+                ## Dual_EC_DRBG Controversy
+                Random numbers generated on a computer are typically **pseudo-random** - generated numbers appear to be random but under the hood
+                they are outputs of a deterministic function. For cryptography, it is crucial to ensure that this deterministic process cannot be reversed -
+                otherwise the attacker could unroll the generation process, and predict all future "random" outputs. The algorithms that make this reversal process
+                infeasible are known as **CSPRNG - Cryptographically Secure Pseudo-Random Number Generators**.
+
+                In 2006, NIST - National Institute of Standards and Technology released recommended CSPRNG algorithms ([4]). They developed **Dual_EC_DRBG - 
+                Dual Elliptic Curve Deterministic Random Bit Generator** algorithm:
+                """)
+
+    _, image, __ = st.columns(3)
+    image.image("./figs/dual_ec_drbg.png", caption = "High-level overview of Dual_EC_DRBG algorithm. Source: [5]")
+
+    st.markdown(r"""
+                Points $P, Q \in E(\mathbb{F_p})$ are fixed, and $s_i$ represents the current state of the random bit generator. $\varphi(x, y)$ is just 
+                x-coordinate projection function, LSB stands for least significant portion of a byte block, and in particular the output of this algorithm is 
+                $bitlen - 16$ long. This means that the attacker is only missing 16 bits of information, and with $2^{16}$ operations we can relatively easy obtain 
+                $r_i Q$. If $P, Q$ were generated truly randomly, this would not be a problem. However, as pointed out in [5], if $P = eQ$ and $e$ was known to 
+                the attacker (NSA was the one who generated points $P, Q$), then we have:
+                $$
+                e(r_i Q) = r_i (e Q) = r_i P
+                $$
+
+                and since $s_{i + 1} = \varphi(r_i P)$, we found out the value of $s_{i + 1}$ and can predict every future output!
+                """)
+    
+    _, image, __ = st.columns(3)
+    image.image("./figs/dual_ec_drbg_attack.png", caption = "Pseudocode for the previously outlined attack. Source: [5]")
+
+    st.markdown(r"""
+                Even though it's infeasible to prove the relation $P = eQ$ due to the difficulty of elliptic curve discrete logarithm problem, paper [5] 
+                raised serious security concerns. Furthermore, Edward Snowden leaks from 2013 (6) show that NSA paid RSA security 10 million dollars to incorporate 
+                Dual_EC_DRBG algorithm in their cryptographic libraries, and this just intensified previous suspicions.
+
+                The conclusion should be that research institutions should not be blindly trusted. Encryption algorithms are backed by a serious mathematical
+                apparatus, and (un)intentionally modifying only a small portion of the algorithm can lead to serious security implications. 
+                """)
+
+    st.markdown(r"""
                 ## Bibliography
                 [1] Hoffstein et al. - An Introduction to Mathematical Cryptography
 
                 [2] Tonelli-Shanks algorithm (https://en.wikipedia.org/wiki/Tonelli%E2%80%93Shanks_algorithm)
 
                 [3] Miller-Rabin primaility test (https://en.wikipedia.org/wiki/Miller%E2%80%93Rabin_primality_test)
-                """)
-    # st.latex(r"\sum_{i=1}^{k}\alpha_k x_k")
 
+                [4] NIST Special Publication 800-90 Recommendation for Random Number Generation Using Deterministic Random Bit Generators, 2006 (https://nvlpubs.nist.gov/nistpubs/Legacy/SP/nistspecialpublication800-90.pdf)
+
+                [5] On the Possibility of a Back Door in the NIST SP800-90 Dual Ec Prng, 2007 (https://rump2007.cr.yp.to/15-shumow.pdf)
+
+                [6]  Dual_EC_DRBG Wikipedia (https://en.wikipedia.org/wiki/Dual_EC_DRBG)
+                """)
+    
 # Required wrapping, otherwise a bunch of warning logs are raised
 # Streamlit is not fully compatible with multiprocessing it seems...
 if __name__ == "__main__":

@@ -1,2 +1,2 @@
+Pillow==11.2.1
 streamlit==1.45.1
-tinyec==0.4.0
