@@ -88,8 +88,6 @@ def main():
                 of points $P, Q$ as follows: We start by drawing the line L through P and Q. This line L intersects E at three points, namely P, Q, and one other point R. We take
                 that point R and reflect it across the x-axis (i.e., we multiply its Y-coordinateby −1) to get a new point R. 
                 The point R is called the "sum of P and Q", and we use the notation $R = P \oplus Q$. This procedure can be seen on the figure below:
-
-                ![no figure](./figs/ecc_2.png)
                 """)
     
     _, image, __ = st.columns(3)
