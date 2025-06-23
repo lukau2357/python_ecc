@@ -1,5 +1,3 @@
-import tinyec.registry as reg
-import tinyec.ec as ec
 import secrets
 
 from typing import Tuple, Union
